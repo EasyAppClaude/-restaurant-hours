@@ -1,0 +1,166 @@
+import { useRef } from 'react';
+import type { AppState } from '../types';
+import { currentMonthKey, formatMonthLabel, formatNum, monthTotal } from '../calc';
+
+function plural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m100 >= 11 && m100 <= 14) return many;
+  if (m10 === 1) return one;
+  if (m10 >= 2 && m10 <= 4) return few;
+  return many;
+}
+function pluralizeRecords(n: number): string {
+  return plural(n, 'смена', 'смены', 'смен');
+}
+function pluralizeWorkers(n: number): string {
+  return plural(n, 'сотрудник', 'сотрудника', 'сотрудников');
+}
+
+type Props = {
+  state: AppState;
+  onOpenWorker: (id: string) => void;
+  onAddWorker: () => void;
+  onImport: (state: AppState) => void;
+  onSetOverviewRates: (rates: { hourly: number }) => void;
+};
+
+export function WorkersList({ state, onOpenWorker, onAddWorker, onImport, onSetOverviewRates }: Props) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const month = currentMonthKey();
+
+  function exportBackup() {
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `restaurant-hours-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importBackup(file: File) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        if (Array.isArray(parsed.workers) && Array.isArray(parsed.entries)) {
+          if (confirm('Заменить текущие данные импортом?')) onImport(parsed);
+        } else {
+          alert('Неверный формат файла');
+        }
+      } catch {
+        alert('Не удалось прочитать файл');
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <div className="screen">
+      <header className="topbar">
+        <h1>Сотрудники</h1>
+        <button className="link" onClick={onAddWorker}>+ Добавить</button>
+      </header>
+
+      <div className="month-label">{formatMonthLabel(month)}</div>
+
+      {state.workers.length === 0 ? (
+        <div className="empty">
+          <p>Нет сотрудников.</p>
+          <button className="primary" onClick={onAddWorker}>Добавить первого</button>
+        </div>
+      ) : (
+        <>
+          <ul className="cards">
+            {state.workers.map((w) => {
+              const t = monthTotal(state.entries, w, month);
+              return (
+                <li key={w.id} className="card" onClick={() => onOpenWorker(w.id)}>
+                  <div className="card-name">{w.name}</div>
+                  <div className="card-stats">
+                    <span>{formatNum(t.hours)} ч</span>
+                    <span className="pay">€{formatNum(t.pay)}</span>
+                  </div>
+                  <div className="card-sub">{t.count} {pluralizeRecords(t.count)}</div>
+                </li>
+              );
+            })}
+          </ul>
+
+          {(() => {
+            const totals = state.workers.reduce(
+              (acc, w) => {
+                const t = monthTotal(state.entries, w, month);
+                acc.hours += t.hours;
+                acc.count += t.count;
+                return acc;
+              },
+              { hours: 0, count: 0 },
+            );
+            const round = (n: number) => Math.round(n * 100) / 100;
+            const rateH = state.overviewRates?.hourly ?? 0;
+            const payH = round(totals.hours * rateH);
+            const payTotal = payH;
+
+            const askRate = () => {
+              const input = prompt('Ставка €/час', rateH ? String(rateH) : '');
+              if (input === null) return;
+              const val = parseFloat(input.replace(',', '.'));
+              if (Number.isNaN(val) || val < 0) {
+                alert('Введите число (например 15 или 12.5)');
+                return;
+              }
+              onSetOverviewRates({ hourly: val });
+            };
+
+            return (
+              <div className="grand-total">
+                <div className="grand-total-label">
+                  Итог за {formatMonthLabel(month).toLowerCase()} · все сотрудники
+                </div>
+                <div className="totals overview-totals">
+                  <button className="overview-cell" onClick={askRate}>
+                    <span>{formatNum(round(totals.hours))}</span>
+                    <div className="overview-unit">ч</div>
+                    <div className="overview-sub">
+                      {rateH > 0 ? `€${formatNum(payH)}` : 'нажмите для ставки'}
+                    </div>
+                    {rateH > 0 && (
+                      <div className="overview-rate">× €{formatNum(rateH)}/ч</div>
+                    )}
+                  </button>
+                  <div className="pay overview-cell overview-cell-static">
+                    <span>€{formatNum(payTotal)}</span>
+                    <div className="overview-unit">всего</div>
+                    <div className="overview-sub">часы × ставка</div>
+                  </div>
+                </div>
+                <div className="grand-total-sub">
+                  {totals.count} {pluralizeRecords(totals.count)} · {state.workers.length}{' '}
+                  {pluralizeWorkers(state.workers.length)}
+                </div>
+              </div>
+            );
+          })()}
+        </>
+      )}
+
+      <footer className="footer-actions">
+        <button className="ghost" onClick={exportBackup}>Скачать backup</button>
+        <button className="ghost" onClick={() => fileRef.current?.click()}>Импорт</button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) importBackup(f);
+            e.target.value = '';
+          }}
+        />
+      </footer>
+    </div>
+  );
+}
